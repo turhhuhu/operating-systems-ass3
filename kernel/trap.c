@@ -72,6 +72,16 @@ usertrap(void)
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
+  if(p->pid > 2){
+    if(r_scause() == 13 || r_scause() == 15){
+      uint64 fault_addr = r_stval();
+      pte_t* pte = walk(p->pagetable, fault_addr, 0);
+      if(PTE_PG & *pte){
+        //TODO: call function from vm.c
+        load_disk_page(fault_addr);
+      }
+    }
+  }
 
   if(p->killed)
     exit(-1);

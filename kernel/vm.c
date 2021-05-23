@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -212,6 +214,46 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
   memmove(mem, src, sz);
 }
 
+void
+swapout(pagetable_t pagetable, char* mem){
+  struct proc* p = myproc();
+  struct page* pg_to_save;
+  for(pg_to_save = p->psyc_pages; pg_to_save < &p->psyc_pages[MAX_PSYC_PAGES]; pg_to_save++){
+    if (pg_to_save->state == USEDPG){
+      break;
+    }
+  }
+  //TODO:change algorithm for task2
+  int swap_index = 0;
+  for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
+    if (pg->state == UNUSEDPG){
+      break;
+    }
+    swap_index ++;
+  }
+
+  release(&p->lock);
+
+  writeToSwapFile(p, (char *)pg_to_save->va, swap_index*PGSIZE, PGSIZE);
+  acquire(&p->lock);
+  kfree((void*)walkaddr(pg_to_save->pagetable, pg_to_save->va));
+
+  p->swapped_pages[swap_index] = *pg_to_save;
+  p->swapped_pages[swap_index].state = USEDPG;
+
+  pte_t* pte = walk(pg_to_save->pagetable, pg_to_save->va, 0);
+  *pte = *pte | PTE_PG;
+  *pte = *pte & ~PTE_V; 
+  sfence_vma();
+
+  
+  struct page* pg_to_swap = pg_to_save;
+
+  pg_to_swap->va = (uint64)mem;
+  pg_to_swap->pagetable = pagetable;
+  pg_to_swap->state = USEDPG;
+}
+
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
 uint64
@@ -219,6 +261,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
   char *mem;
   uint64 a;
+  struct proc* p = myproc();
 
   if(newsz < oldsz)
     return oldsz;
@@ -236,9 +279,30 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+    if(p->pid > 2){
+      acquire(&p->lock);
+      char found = 0;
+      for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES] && !found; pg++){
+        if (pg->state == UNUSEDPG){
+          pg->state = USEDPG;
+          pg->pagetable = pagetable;
+          pg->va = (uint64)mem;
+          found = 1;
+        }
+      }
+      if (!found){
+        swapout(pagetable, mem);
+      }
+      release(&p->lock);
+    }
   }
   return newsz;
 }
+
+
+
+
+
 
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
@@ -256,6 +320,77 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   }
 
   return newsz;
+}
+
+// it just swoops
+// and tidy up!
+void
+swp_in(uint64 round_va, void* pyscpg, struct page* free_pg, char* pg_buffer){
+  struct proc* p = myproc();
+  pte_t* pte = walk(p->pagetable, round_va, 0);
+  *pte |= PTE_W | PTE_U | PTE_V;
+  *pte &= PTE_PG;
+  *pte |= PA2PTE(pyscpg);
+  int pg_index = 0;
+  struct page* pg;
+  for(pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
+    if(pg->va == round_va){
+      break;
+    }
+    pg_index++;
+  }
+  if(!readFromSwapFile(p, pg_buffer, pg_index*PGSIZE, PGSIZE)){
+    panic("failed to read from file.");
+  }
+  *free_pg = *pg;
+  pg->state = UNUSEDPG;
+  free_pg->state = USEDPG;
+} 
+
+void
+load_disk_page(uint64 va){
+  uint64 round_va = PGROUNDDOWN(va);
+  void* pyscpg = kalloc();
+  struct proc* p = myproc();
+
+  char found = 0;
+  struct page* free_pg;
+  for(free_pg = p->psyc_pages; free_pg < &p->psyc_pages[MAX_PSYC_PAGES] && !found; free_pg++){
+    if (free_pg->state == UNUSEDPG){
+      found = 1;
+    }
+  }
+  if(found){
+    char pg_buffer[PGSIZE];
+    swp_in(round_va, pyscpg, free_pg, pg_buffer);
+    memmove((void*)pyscpg, pg_buffer, PGSIZE);
+  }
+  else{
+    //TODO:change algorithm for task2
+    struct page* pg_to_swap = &p->psyc_pages[0];
+     //TODO:change algorithm for task2
+    int swap_index = 0;
+    for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
+      if (pg->state == UNUSEDPG){
+        break;
+      }
+      swap_index ++;
+    }
+    writeToSwapFile(p, (char *)pg_to_swap->va, swap_index*PGSIZE, PGSIZE);
+    kfree((void*)walkaddr(pg_to_swap->pagetable, pg_to_swap->va));
+    p->swapped_pages[swap_index] = *pg_to_swap;
+    p->swapped_pages[swap_index].state = USEDPG;
+    pte_t* pte = walk(pg_to_swap->pagetable, pg_to_swap->va, 0);
+    *pte = *pte | PTE_PG;
+    *pte = *pte & ~PTE_V; 
+    sfence_vma();
+
+
+    char pg_buffer[PGSIZE];
+    swp_in(round_va, pyscpg, pg_to_swap, pg_buffer);
+    memmove((void*)pyscpg, pg_buffer, PGSIZE);
+
+  }
 }
 
 // Recursively free page-table pages.

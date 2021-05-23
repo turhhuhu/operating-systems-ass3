@@ -104,6 +104,7 @@ allocpid() {
 static struct proc*
 allocproc(void)
 {
+
   struct proc *p;
 
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -141,6 +142,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  if(p->pid > 2){
+    createSwapFile(p);
+  }
+
   return p;
 }
 
@@ -155,6 +160,16 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
+  if(p->pid > 2){
+    for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
+      pg->state = UNUSEDPG;
+    }
+    for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
+      pg->state = UNUSEDPG;
+    }
+  }
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -287,6 +302,21 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  if(p->pid > 2){
+    char buffer[MAX_PSYC_PAGES*PGSIZE];
+    readFromSwapFile(p, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
+    writeToSwapFile(np, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
+    
+    for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
+      np->psyc_pages[page_index] = p->psyc_pages[page_index];
+      np->swapped_pages[page_index] = p->swapped_pages[page_index];
+      np->psyc_pages[page_index].pagetable = np->pagetable;
+      np->swapped_pages[page_index].pagetable = np->pagetable;
+    }
+  }
+ 
+
+
   np->sz = p->sz;
 
   // copy saved user registers.
@@ -374,6 +404,9 @@ exit(int status)
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
+  if(p->pid > 2){
+    removeSwapFile(p);
+  }
   sched();
   panic("zombie exit");
 }

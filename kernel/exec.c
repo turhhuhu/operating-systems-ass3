@@ -109,6 +109,12 @@ exec(char *path, char **argv)
   safestrcpy(p->name, last, sizeof(p->name));
     
   // Commit to the user image.
+  if(p->pid > 2){
+    for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
+      p->psyc_pages[page_index].pagetable = pagetable;
+      p->swapped_pages[page_index].pagetable = pagetable;
+    }
+  }
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
   p->sz = sz;
