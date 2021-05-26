@@ -67,21 +67,19 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(p->pid > 2 && (r_scause() == 12 || r_scause() == 13 || r_scause() == 15)){
+      uint64 fault_addr = r_stval();
+      pte_t* pte = walk(p->pagetable, fault_addr, 0);
+      if(PTE_PG & *pte){
+        load_disk_page(fault_addr);
+      }
   } else {
+    
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
-  if(p->pid > 2){
-    if(r_scause() == 13 || r_scause() == 15){
-      uint64 fault_addr = r_stval();
-      pte_t* pte = walk(p->pagetable, fault_addr, 0);
-      if(PTE_PG & *pte){
-        //TODO: call function from vm.c
-        load_disk_page(fault_addr);
-      }
-    }
-  }
+
 
   if(p->killed)
     exit(-1);
@@ -147,6 +145,7 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
+
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");

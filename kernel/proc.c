@@ -143,7 +143,9 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   if(p->pid > 2){
+    release(&p->lock);
     createSwapFile(p);
+    acquire(&p->lock);
   }
 
   return p;
@@ -304,9 +306,12 @@ fork(void)
   }
   if(p->pid > 2){
     char buffer[MAX_PSYC_PAGES*PGSIZE];
+
+    release(&np->lock);
     readFromSwapFile(p, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
     writeToSwapFile(np, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-    
+    acquire(&np->lock);
+
     for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
       np->psyc_pages[page_index] = p->psyc_pages[page_index];
       np->swapped_pages[page_index] = p->swapped_pages[page_index];
@@ -405,7 +410,9 @@ exit(int status)
 
   // Jump into the scheduler, never to return.
   if(p->pid > 2){
+    release(&p->lock);
     removeSwapFile(p);
+    acquire(&p->lock);
   }
   sched();
   panic("zombie exit");

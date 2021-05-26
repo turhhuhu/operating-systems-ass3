@@ -164,6 +164,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
+  struct proc* p = myproc();
   uint64 a;
   pte_t *pte;
 
@@ -173,13 +174,20 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
+    if(((*pte & PTE_V) == 0) && ((*pte & PTE_PG) == 0))
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
+    if(do_free && ((*pte & PTE_PG) == 0)){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
+    }
+    for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
+      if(pg->va == a && pg->pagetable == pagetable){
+        pg->state = UNUSEDPG;
+        pg->pagetable = 0;
+        pg->va = 0;
+      }
     }
     *pte = 0;
   }
@@ -215,7 +223,7 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 }
 
 void
-swapout(pagetable_t pagetable, char* mem){
+swapout(pagetable_t pagetable, uint64 a){
   struct proc* p = myproc();
   struct page* pg_to_save;
   for(pg_to_save = p->psyc_pages; pg_to_save < &p->psyc_pages[MAX_PSYC_PAGES]; pg_to_save++){
@@ -234,10 +242,11 @@ swapout(pagetable_t pagetable, char* mem){
 
   release(&p->lock);
 
-  writeToSwapFile(p, (char *)pg_to_save->va, swap_index*PGSIZE, PGSIZE);
+  uint64 pa = walkaddr(pg_to_save->pagetable, pg_to_save->va);
+  writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
   acquire(&p->lock);
-  kfree((void*)walkaddr(pg_to_save->pagetable, pg_to_save->va));
-
+  kfree((void*)pa);
+  
   p->swapped_pages[swap_index] = *pg_to_save;
   p->swapped_pages[swap_index].state = USEDPG;
 
@@ -249,7 +258,7 @@ swapout(pagetable_t pagetable, char* mem){
   
   struct page* pg_to_swap = pg_to_save;
 
-  pg_to_swap->va = (uint64)mem;
+  pg_to_swap->va = a;
   pg_to_swap->pagetable = pagetable;
   pg_to_swap->state = USEDPG;
 }
@@ -286,12 +295,12 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
         if (pg->state == UNUSEDPG){
           pg->state = USEDPG;
           pg->pagetable = pagetable;
-          pg->va = (uint64)mem;
+          pg->va = a;
           found = 1;
         }
       }
       if (!found){
-        swapout(pagetable, mem);
+        swapout(pagetable, a);
       }
       release(&p->lock);
     }
@@ -329,7 +338,7 @@ swp_in(uint64 round_va, void* pyscpg, struct page* free_pg, char* pg_buffer){
   struct proc* p = myproc();
   pte_t* pte = walk(p->pagetable, round_va, 0);
   *pte |= PTE_W | PTE_U | PTE_V;
-  *pte &= PTE_PG;
+  *pte &= ~PTE_PG;
   *pte |= PA2PTE(pyscpg);
   int pg_index = 0;
   struct page* pg;
@@ -368,7 +377,7 @@ load_disk_page(uint64 va){
   else{
     //TODO:change algorithm for task2
     struct page* pg_to_swap = &p->psyc_pages[0];
-     //TODO:change algorithm for task2
+    //TODO:change algorithm for task2
     int swap_index = 0;
     for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
       if (pg->state == UNUSEDPG){
@@ -376,8 +385,9 @@ load_disk_page(uint64 va){
       }
       swap_index ++;
     }
-    writeToSwapFile(p, (char *)pg_to_swap->va, swap_index*PGSIZE, PGSIZE);
-    kfree((void*)walkaddr(pg_to_swap->pagetable, pg_to_swap->va));
+    uint64 pa = walkaddr(pg_to_swap->pagetable, pg_to_swap->va);
+    writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
+    kfree((void*)pa);
     p->swapped_pages[swap_index] = *pg_to_swap;
     p->swapped_pages[swap_index].state = USEDPG;
     pte_t* pte = walk(pg_to_swap->pagetable, pg_to_swap->va, 0);
@@ -442,6 +452,10 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    if(*pte & PTE_PG){
+      *pte &= ~PTE_V;
+      sfence_vma();
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
