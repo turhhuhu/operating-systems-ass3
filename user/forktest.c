@@ -27,6 +27,7 @@ forktest(void)
     if(pid == 0)
       exit(0);
   }
+  print("after a lot of fork\n");
 
   if(n == N){
     print("fork claimed to work N times!\n");

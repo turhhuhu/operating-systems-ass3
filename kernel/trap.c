@@ -68,10 +68,12 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if(p->pid > 2 && (r_scause() == 12 || r_scause() == 13 || r_scause() == 15)){
-      uint64 fault_addr = r_stval();
-      pte_t* pte = walk(p->pagetable, fault_addr, 0);
+      printf("pagefault\n");
+      uint64 va = r_stval();
+      pte_t* pte = walk(p->pagetable, va, 0);
       if(PTE_PG & *pte){
-        load_disk_page(fault_addr);
+        printf("loading page from disk\n");
+        load_disk_page(va);
       }
   } else {
     

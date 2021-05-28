@@ -181,7 +181,14 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  if(p->pid > 2){
+    release(&p->lock);
+    removeSwapFile(p);
+    acquire(&p->lock);
+  }
 }
+
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -215,6 +222,7 @@ proc_pagetable(struct proc *p)
 
   return pagetable;
 }
+
 
 // Free a process's page table, and free the
 // physical memory it refers to.
@@ -304,14 +312,40 @@ fork(void)
     release(&np->lock);
     return -1;
   }
-  if(p->pid > 2){
-    char buffer[MAX_PSYC_PAGES*PGSIZE];
+  // if(p->pid > 2){
+  //   char buffer[MAX_PSYC_PAGES*PGSIZE];
+  //   memset((void*)&buffer, 0, MAX_PSYC_PAGES*PGSIZE);
+  //   release(&np->lock);
+  //   readFromSwapFile(p, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
+  //   writeToSwapFile(np, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
+  //   acquire(&np->lock);
 
-    release(&np->lock);
-    readFromSwapFile(p, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-    writeToSwapFile(np, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-    acquire(&np->lock);
+  //   for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
+  //     np->psyc_pages[page_index] = p->psyc_pages[page_index];
+  //     np->swapped_pages[page_index] = p->swapped_pages[page_index];
+  //     np->psyc_pages[page_index].pagetable = np->pagetable;
+  //     np->swapped_pages[page_index].pagetable = np->pagetable;
+  //   }
+  // }
 
+  struct page* pg;
+
+  if (np->pid > 2)
+  {
+    int index = 0;
+    for(pg = p->swapped_pages ; pg < &p->swapped_pages[MAX_PSYC_PAGES] ; pg++)
+    {
+      if (pg->state == USEDPG)
+      {
+        char* mem = kalloc();
+        release(&np->lock);
+        readFromSwapFile(p, mem, index*PGSIZE, PGSIZE);
+        writeToSwapFile(np, mem, index*PGSIZE, PGSIZE);
+        acquire(&np->lock);
+        kfree(mem);
+      }
+      index++;
+    }
     for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
       np->psyc_pages[page_index] = p->psyc_pages[page_index];
       np->swapped_pages[page_index] = p->swapped_pages[page_index];
@@ -409,11 +443,7 @@ exit(int status)
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
-  if(p->pid > 2){
-    release(&p->lock);
-    removeSwapFile(p);
-    acquire(&p->lock);
-  }
+
   sched();
   panic("zombie exit");
 }

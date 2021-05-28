@@ -263,6 +263,7 @@ swapout(pagetable_t pagetable, uint64 a){
   pg_to_swap->state = USEDPG;
 }
 
+
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
 uint64
@@ -331,50 +332,61 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   return newsz;
 }
 
+
 // it just swoops
 // and tidy up!
 void
-swp_in(uint64 round_va, void* pyscpg, struct page* free_pg, char* pg_buffer){
+swp_in(uint64 round_va, void* pyscpg, struct page* free_pg){
   struct proc* p = myproc();
   pte_t* pte = walk(p->pagetable, round_va, 0);
-  *pte |= PTE_W | PTE_U | PTE_V;
-  *pte &= ~PTE_PG;
-  *pte |= PA2PTE(pyscpg);
-  int pg_index = 0;
+  // *pte |= PTE_W | PTE_U | PTE_V;
+  // *pte &= ~PTE_PG;
+  // *pte |= PA2PTE(pyscpg);
+
+  int perm = (*pte) & 1023; //gives me the lower 10bits (permissions)
+  perm = (perm ^ PTE_PG) | PTE_V; // turn off pg flag and turn on valid
+  *pte = (PA2PTE(pyscpg) | perm);
+
   struct page* pg;
+  int pg_index = 0;
   for(pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
     if(pg->va == round_va){
       break;
     }
     pg_index++;
   }
-  if(!readFromSwapFile(p, pg_buffer, pg_index*PGSIZE, PGSIZE)){
+  release(&p->lock);
+  if(!readFromSwapFile(p, pyscpg, pg_index*PGSIZE, PGSIZE)){
     panic("failed to read from file.");
   }
-  *free_pg = *pg;
+  acquire(&p->lock);
+  free_pg->va = pg->va;
+  free_pg->pagetable = p->pagetable;
   pg->state = UNUSEDPG;
   free_pg->state = USEDPG;
-} 
+}
 
 void
 load_disk_page(uint64 va){
   uint64 round_va = PGROUNDDOWN(va);
   void* pyscpg = kalloc();
   struct proc* p = myproc();
+  acquire(&p->lock);
 
   char found = 0;
   struct page* free_pg;
   for(free_pg = p->psyc_pages; free_pg < &p->psyc_pages[MAX_PSYC_PAGES] && !found; free_pg++){
-    if (free_pg->state == UNUSEDPG){
+  if (free_pg->state == UNUSEDPG){
       found = 1;
     }
   }
+
   if(found){
-    char pg_buffer[PGSIZE];
-    swp_in(round_va, pyscpg, free_pg, pg_buffer);
-    memmove((void*)pyscpg, pg_buffer, PGSIZE);
+    printf("found\n");
+    swp_in(round_va, pyscpg, free_pg);
   }
   else{
+    printf("not found\n");
     //TODO:change algorithm for task2
     struct page* pg_to_swap = &p->psyc_pages[0];
     //TODO:change algorithm for task2
@@ -385,22 +397,24 @@ load_disk_page(uint64 va){
       }
       swap_index ++;
     }
-    uint64 pa = walkaddr(pg_to_swap->pagetable, pg_to_swap->va);
+    printf("before walk addr\n");
+    uint64 pa = walkaddr(p->pagetable, pg_to_swap->va);
+    release(&p->lock);
     writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
+    acquire(&p->lock);
+    printf("after write\n");
     kfree((void*)pa);
     p->swapped_pages[swap_index] = *pg_to_swap;
     p->swapped_pages[swap_index].state = USEDPG;
-    pte_t* pte = walk(pg_to_swap->pagetable, pg_to_swap->va, 0);
+    pte_t* pte = walk(p->pagetable, pg_to_swap->va, 0);
     *pte = *pte | PTE_PG;
     *pte = *pte & ~PTE_V; 
     sfence_vma();
 
-
-    char pg_buffer[PGSIZE];
-    swp_in(round_va, pyscpg, pg_to_swap, pg_buffer);
-    memmove((void*)pyscpg, pg_buffer, PGSIZE);
-
+    swp_in(round_va, pyscpg, free_pg);
+    printf("free pg pagetable %p\n", free_pg->pagetable);
   }
+  release(&p->lock);
 }
 
 // Recursively free page-table pages.
@@ -450,7 +464,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V ) == 0 && ((*pte & PTE_PG) == 0))
       panic("uvmcopy: page not present");
     if(*pte & PTE_PG){
       *pte &= ~PTE_V;
