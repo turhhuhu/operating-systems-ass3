@@ -142,12 +142,6 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
-  if(p->pid > 2){
-    release(&p->lock);
-    createSwapFile(p);
-    acquire(&p->lock);
-  }
-
   return p;
 }
 
@@ -157,6 +151,11 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  if(p->pid > 2){
+    release(&p->lock);
+    removeSwapFile(p);
+    acquire(&p->lock);
+  }
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -166,11 +165,16 @@ freeproc(struct proc *p)
   if(p->pid > 2){
     for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
       pg->state = UNUSEDPG;
+      pg->pagetable = 0;
+      pg->va = 0;
     }
     for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
       pg->state = UNUSEDPG;
+      pg->pagetable = 0;
+      pg->va = 0;
     }
   }
+
 
   p->pagetable = 0;
   p->sz = 0;
@@ -182,11 +186,6 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
 
-  if(p->pid > 2){
-    release(&p->lock);
-    removeSwapFile(p);
-    acquire(&p->lock);
-  }
 }
 
 
@@ -332,6 +331,9 @@ fork(void)
 
   if (np->pid > 2)
   {
+    release(&np->lock);
+    createSwapFile(np);
+    acquire(&np->lock);
     int index = 0;
     for(pg = p->swapped_pages ; pg < &p->swapped_pages[MAX_PSYC_PAGES] ; pg++)
     {
@@ -477,7 +479,9 @@ wait(uint64 addr)
             release(&wait_lock);
             return -1;
           }
+          release(&wait_lock);
           freeproc(np);
+          acquire(&wait_lock);
           release(&np->lock);
           release(&wait_lock);
           return pid;

@@ -253,6 +253,7 @@ swapout(pagetable_t pagetable, uint64 a){
   pte_t* pte = walk(pg_to_save->pagetable, pg_to_save->va, 0);
   *pte = *pte | PTE_PG;
   *pte = *pte & ~PTE_V; 
+
   sfence_vma();
 
   
@@ -339,13 +340,11 @@ void
 swp_in(uint64 round_va, void* pyscpg, struct page* free_pg){
   struct proc* p = myproc();
   pte_t* pte = walk(p->pagetable, round_va, 0);
-  // *pte |= PTE_W | PTE_U | PTE_V;
-  // *pte &= ~PTE_PG;
-  // *pte |= PA2PTE(pyscpg);
 
-  int perm = (*pte) & 1023; //gives me the lower 10bits (permissions)
-  perm = (perm ^ PTE_PG) | PTE_V; // turn off pg flag and turn on valid
-  *pte = (PA2PTE(pyscpg) | perm);
+  int flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_PG;
+  flags |= PTE_V;
+  *pte = (PA2PTE(pyscpg) | flags);
 
   struct page* pg;
   int pg_index = 0;
