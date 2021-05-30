@@ -2748,7 +2748,6 @@ run(void f(char *), char *s) {
 int
 main(int argc, char *argv[])
 {
-  printf("here\n");
   int continuous = 0;
   char *justone = 0;
 
@@ -2778,7 +2777,7 @@ main(int argc, char *argv[])
     {truncate1, "truncate1"},
     {truncate2, "truncate2"},
     {truncate3, "truncate3"},
-    {reparent2, "reparent2"},
+    //{reparent2, "reparent2"},
     {pgbug, "pgbug" },
     {sbrkbugs, "sbrkbugs" },
     // {badwrite, "badwrite" },

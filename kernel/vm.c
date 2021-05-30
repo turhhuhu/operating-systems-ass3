@@ -67,6 +67,71 @@ kvminithart()
   sfence_vma();
 }
 
+uint count_one_bits(uint num)
+{
+    uint count = 0;
+    while (num) {
+        count += num & 1;
+        num >>= 1;
+    }
+    return count;
+}
+
+#ifdef NFUA
+struct page* 
+select_page_to_swap()
+{
+  struct proc* p = myproc();
+  struct page* min_page = &p->psyc_pages[0];
+  
+  for(struct page* page_to_swap = p->psyc_pages; page_to_swap < &p->psyc_pages[MAX_PSYC_PAGES]; page_to_swap++){
+    if(page_to_swap->counter < min_page->counter){
+      min_page = page_to_swap;
+    }
+  }
+  return min_page;
+}
+uint reset_couter_value(){
+  return 0;
+}
+#endif
+
+#ifdef LAPA
+struct page* 
+select_page_to_swap()
+{
+  struct proc* p = myproc();
+  struct page* min_page = &p->psyc_pages[0];
+  
+
+  for(struct page* page_to_swap = p->psyc_pages; page_to_swap < &p->psyc_pages[MAX_PSYC_PAGES]; page_to_swap++){
+    uint p_ones = count_one_bits(page_to_swap->counter);
+    uint curr_min_ones = count_one_bits(min_page->counter);
+    if(p_ones < curr_min_ones){
+      min_page = page_to_swap;
+    }
+    if(p_ones == curr_min_ones && page_to_swap->counter < min_page->counter){
+      min_page = page_to_swap;
+    }
+  }
+  return min_page;
+}
+uint reset_couter_value(){
+  return 0xFFFFFFFF;
+}
+#endif
+
+#ifdef NONE
+struct page* 
+select_page_to_swap()
+{
+  return 0;
+}
+uint reset_couter_value(){
+  return 0;
+}
+#endif
+
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page-table pages.
@@ -164,7 +229,6 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
-  struct proc* p = myproc();
   uint64 a;
   pte_t *pte;
 
@@ -174,14 +238,32 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
+    #ifndef NONE
     if(((*pte & PTE_V) == 0) && ((*pte & PTE_PG) == 0))
       panic("uvmunmap: not mapped");
+    #else
+    if((*pte & PTE_V) == 0){
+      panic("uvmunmap: not mapped");
+    }
+    #endif
+
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+
+    #ifndef NONE
     if(do_free && ((*pte & PTE_PG) == 0)){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+    #else
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    #endif
+
+    #ifndef NONE
+    struct proc* p = myproc();
     for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
       if(pg->va == a && pg->pagetable == pagetable){
         pg->state = UNUSEDPG;
@@ -189,6 +271,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
         pg->va = 0;
       }
     }
+    #endif
     *pte = 0;
   }
 }
@@ -225,13 +308,8 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 void
 swapout(pagetable_t pagetable, uint64 a){
   struct proc* p = myproc();
-  struct page* pg_to_save;
-  for(pg_to_save = p->psyc_pages; pg_to_save < &p->psyc_pages[MAX_PSYC_PAGES]; pg_to_save++){
-    if (pg_to_save->state == USEDPG){
-      break;
-    }
-  }
-  //TODO:change algorithm for task2
+  struct page* pg_to_save = select_page_to_swap();
+
   int swap_index = 0;
   for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
     if (pg->state == UNUSEDPG){
@@ -262,6 +340,7 @@ swapout(pagetable_t pagetable, uint64 a){
   pg_to_swap->va = a;
   pg_to_swap->pagetable = pagetable;
   pg_to_swap->state = USEDPG;
+  pg_to_swap->counter = reset_couter_value();
 }
 
 
@@ -272,7 +351,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
   char *mem;
   uint64 a;
-  struct proc* p = myproc();
 
   if(newsz < oldsz)
     return oldsz;
@@ -290,6 +368,8 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+    #ifndef NONE
+    struct proc* p = myproc();
     if(p->pid > 2){
       acquire(&p->lock);
       char found = 0;
@@ -299,6 +379,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
           pg->pagetable = pagetable;
           pg->va = a;
           found = 1;
+          pg->counter = reset_couter_value();
         }
       }
       if (!found){
@@ -306,6 +387,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       }
       release(&p->lock);
     }
+    #endif
   }
   return newsz;
 }
@@ -363,6 +445,7 @@ swp_in(uint64 round_va, void* pyscpg, struct page* free_pg){
   free_pg->pagetable = p->pagetable;
   pg->state = UNUSEDPG;
   free_pg->state = USEDPG;
+  free_pg->counter = reset_couter_value();
 }
 
 void
@@ -387,7 +470,7 @@ load_disk_page(uint64 va){
   else{
     printf("not found\n");
     //TODO:change algorithm for task2
-    struct page* pg_to_swap = &p->psyc_pages[0];
+    struct page* pg_to_swap = select_page_to_swap();
     //TODO:change algorithm for task2
     int swap_index = 0;
     for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
@@ -463,12 +546,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
+    #ifndef NONE
     if((*pte & PTE_V ) == 0 && ((*pte & PTE_PG) == 0))
       panic("uvmcopy: page not present");
     if(*pte & PTE_PG){
       *pte &= ~PTE_V;
       sfence_vma();
     }
+    #else
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    #endif
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

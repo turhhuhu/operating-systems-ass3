@@ -151,30 +151,35 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  #ifndef NONE
   if(p->pid > 2){
     release(&p->lock);
     removeSwapFile(p);
     acquire(&p->lock);
   }
+  #endif
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
 
+  #ifndef NONE
   if(p->pid > 2){
     for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
       pg->state = UNUSEDPG;
       pg->pagetable = 0;
       pg->va = 0;
+      pg->counter = 0;
     }
     for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
       pg->state = UNUSEDPG;
       pg->pagetable = 0;
       pg->va = 0;
+      pg->counter = 0;
     }
   }
-
+  #endif
 
   p->pagetable = 0;
   p->sz = 0;
@@ -327,8 +332,9 @@ fork(void)
   //   }
   // }
 
-  struct page* pg;
 
+  #ifndef NONE
+  struct page* pg;
   if (np->pid > 2)
   {
     release(&np->lock);
@@ -355,6 +361,7 @@ fork(void)
       np->swapped_pages[page_index].pagetable = np->pagetable;
     }
   }
+  #endif
  
 
 
@@ -479,9 +486,14 @@ wait(uint64 addr)
             release(&wait_lock);
             return -1;
           }
+          #ifndef NONE
+          //TODO: Check how to liftor (panic: sched locks)
           release(&wait_lock);
           freeproc(np);
           acquire(&wait_lock);
+          #else
+          freeproc(np);
+          #endif
           release(&np->lock);
           release(&wait_lock);
           return pid;
@@ -528,7 +540,19 @@ scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
-
+        for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
+          if(pg->state == UNUSEDPG){
+            continue;
+          }
+          pte_t* pte = walk(p->pagetable, pg->va, 0);
+          if(PTE_A & *pte){ 
+            pg->counter = (pg->counter >> 1) | 1L << 31;
+            *pte &= ~PTE_A;
+          }
+          else{
+            pg->counter = (pg->counter >> 1);
+          }
+        }
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;

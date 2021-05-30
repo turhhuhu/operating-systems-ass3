@@ -89,6 +89,7 @@ struct page {
   enum pagestate state;
   pagetable_t pagetable;
   uint64 va;
+  uint counter;
 };
 
 // Per-process state

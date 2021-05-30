@@ -67,7 +67,9 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if(p->pid > 2 && (r_scause() == 12 || r_scause() == 13 || r_scause() == 15)){
+  }
+  #ifndef NONE
+  else if(p->pid > 2 && (r_scause() == 12 || r_scause() == 13 || r_scause() == 15)){
       printf("pagefault\n");
       uint64 va = r_stval();
       pte_t* pte = walk(p->pagetable, va, 0);
@@ -75,7 +77,9 @@ usertrap(void)
         printf("loading page from disk\n");
         load_disk_page(va);
       }
-  } else {
+  } 
+  #endif 
+  else {
     
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
