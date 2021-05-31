@@ -193,6 +193,48 @@ freeproc(struct proc *p)
 
 }
 
+#ifndef NONE
+
+static void
+freeprocwithoutswapfile(struct proc *p)
+{
+  if(p->trapframe)
+    kfree((void*)p->trapframe);
+  p->trapframe = 0;
+  if(p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz);
+
+  #ifndef NONE
+  if(p->pid > 2){
+    for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
+      pg->state = UNUSEDPG;
+      pg->pagetable = 0;
+      pg->va = 0;
+      pg->counter = 0;
+    }
+    for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
+      pg->state = UNUSEDPG;
+      pg->pagetable = 0;
+      pg->va = 0;
+      pg->counter = 0;
+    }
+  }
+  #endif
+
+  p->pagetable = 0;
+  p->sz = 0;
+  p->pid = 0;
+  p->parent = 0;
+  p->name[0] = 0;
+  p->chan = 0;
+  p->killed = 0;
+  p->xstate = 0;
+  p->state = UNUSED;
+
+}
+
+#endif
+
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -334,11 +376,14 @@ fork(void)
 
 
   #ifndef NONE
+  acquire(&p->lock);
   struct page* pg;
   if (np->pid > 2)
   {
     release(&np->lock);
+    release(&p->lock);
     createSwapFile(np);
+    acquire(&p->lock);
     acquire(&np->lock);
     int index = 0;
     for(pg = p->swapped_pages ; pg < &p->swapped_pages[MAX_PSYC_PAGES] ; pg++)
@@ -347,8 +392,10 @@ fork(void)
       {
         char* mem = kalloc();
         release(&np->lock);
+        release(&p->lock);
         readFromSwapFile(p, mem, index*PGSIZE, PGSIZE);
         writeToSwapFile(np, mem, index*PGSIZE, PGSIZE);
+        acquire(&p->lock);
         acquire(&np->lock);
         kfree(mem);
       }
@@ -361,6 +408,7 @@ fork(void)
       np->swapped_pages[page_index].pagetable = np->pagetable;
     }
   }
+  release(&p->lock);
   #endif
  
 
@@ -487,10 +535,14 @@ wait(uint64 addr)
             return -1;
           }
           #ifndef NONE
-          //TODO: Check how to liftor (panic: sched locks)
-          release(&wait_lock);
-          freeproc(np);
-          acquire(&wait_lock);
+          if(np->pid > 2){
+            release(&wait_lock);
+            release(&np->lock);
+            removeSwapFile(np);
+            acquire(&np->lock);
+            acquire(&wait_lock);
+          }
+          freeprocwithoutswapfile(np);
           #else
           freeproc(np);
           #endif

@@ -51,6 +51,15 @@ kvmmake(void)
   return kpgtbl;
 }
 
+void shiftarrayleft(){
+  struct proc* p = myproc();
+  struct page firstpage = p->psyc_pages[0];
+  for(int i = 0; i < MAX_PSYC_PAGES - 1; i++){
+    p->psyc_pages[i] = p->psyc_pages[i+1];
+  }
+  p->psyc_pages[MAX_PSYC_PAGES - 1] = firstpage;
+}
+
 // Initialize the one kernel_pagetable
 void
 kvminit(void)
@@ -120,6 +129,49 @@ uint reset_couter_value(){
   return 0xFFFFFFFF;
 }
 #endif
+#ifdef SCFIFO
+struct page* 
+select_page_to_swap()
+{
+  struct proc* p = myproc();
+  struct page* pg = &p->psyc_pages[0];
+  int found_page_to_swap = 0;
+  while(!found_page_to_swap){
+    if(pg->state == UNUSEDPG){
+      shiftarrayleft();
+      continue;
+    }
+    pte_t* pte = walk(p->pagetable, pg->va, 0);
+    if(PTE_A & *pte){
+      *pte &= ~PTE_A;
+      shiftarrayleft();
+    }
+    else{
+      found_page_to_swap = 1;
+    }
+  }
+  return pg;
+}
+uint reset_couter_value(){
+  return 0;
+}
+void move_to_end_of_queue(struct page* pg){
+  struct proc* p = myproc();
+  int index = 0;
+  for(struct page* page = p->psyc_pages; page < &p->psyc_pages[MAX_PSYC_PAGES]; page++){
+    if(pg == page){
+      break;
+    }
+    index++;
+  }
+
+  for(int i = index; i < MAX_PSYC_PAGES - 1; i++){
+    p->psyc_pages[i] = p->psyc_pages[i + 1];
+  }
+  p->psyc_pages[MAX_PSYC_PAGES - 1] = *pg;
+}
+
+#endif
 
 #ifdef NONE
 struct page* 
@@ -177,12 +229,21 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
+  if(pte == 0){
     return 0;
-  if((*pte & PTE_V) == 0)
+  }
+  #ifndef NONE
+  if((*pte & PTE_V) == 0 && (*pte & PTE_PG) == 0){
     return 0;
-  if((*pte & PTE_U) == 0)
+  }
+  #else
+  if((*pte & PTE_V) == 0){
     return 0;
+  }
+  #endif
+  if((*pte & PTE_U) == 0){
+    return 0;
+  }
   pa = PTE2PA(*pte);
   return pa;
 }
@@ -264,6 +325,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
     #ifndef NONE
     struct proc* p = myproc();
+    //TODO: might have panic acquire
+    acquire(&p->lock);
     for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
       if(pg->va == a && pg->pagetable == pagetable){
         pg->state = UNUSEDPG;
@@ -271,6 +334,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
         pg->va = 0;
       }
     }
+    release(&p->lock);
     #endif
     *pte = 0;
   }
@@ -307,6 +371,7 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
 void
 swapout(pagetable_t pagetable, uint64 a){
+    printf("before swap out\n");
   struct proc* p = myproc();
   struct page* pg_to_save = select_page_to_swap();
 
@@ -319,14 +384,21 @@ swapout(pagetable_t pagetable, uint64 a){
   }
 
   release(&p->lock);
-
-  uint64 pa = walkaddr(pg_to_save->pagetable, pg_to_save->va);
+  printf("state of pg is: %s\n", pg_to_save->state == UNUSEDPG ? "UNUSEDPG" : "USEDPG");
+  printf("virutal address is: %p\n", pg_to_save->va);
+  printf("pg pagetable: %p\n", pg_to_save->pagetable);
+  printf("process pagetable: %p\n", p->pagetable);
+  printf("function pagetable: %p\n", pagetable);
+  pte_t* pte_to_take_from = walk(pg_to_save->pagetable, pg_to_save->va, 0);
+  uint64 pa = PTE2PA(*pte_to_take_from);
+  printf("physical address is: %p\n", pa);
   writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
   acquire(&p->lock);
   kfree((void*)pa);
   
   p->swapped_pages[swap_index] = *pg_to_save;
   p->swapped_pages[swap_index].state = USEDPG;
+
 
   pte_t* pte = walk(pg_to_save->pagetable, pg_to_save->va, 0);
   *pte = *pte | PTE_PG;
@@ -341,6 +413,10 @@ swapout(pagetable_t pagetable, uint64 a){
   pg_to_swap->pagetable = pagetable;
   pg_to_swap->state = USEDPG;
   pg_to_swap->counter = reset_couter_value();
+  printf("after swap out\n");
+  #ifdef SCFIFO
+  move_to_end_of_queue(pg_to_swap);
+  #endif
 }
 
 
@@ -380,6 +456,9 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
           pg->va = a;
           found = 1;
           pg->counter = reset_couter_value();
+          #ifdef SCFIFO
+          move_to_end_of_queue(pg);
+          #endif
         }
       }
       if (!found){
@@ -446,6 +525,9 @@ swp_in(uint64 round_va, void* pyscpg, struct page* free_pg){
   pg->state = UNUSEDPG;
   free_pg->state = USEDPG;
   free_pg->counter = reset_couter_value();
+  #ifdef SCFIFO
+  move_to_end_of_queue(free_pg);
+  #endif
 }
 
 void
@@ -458,20 +540,16 @@ load_disk_page(uint64 va){
   char found = 0;
   struct page* free_pg;
   for(free_pg = p->psyc_pages; free_pg < &p->psyc_pages[MAX_PSYC_PAGES] && !found; free_pg++){
-  if (free_pg->state == UNUSEDPG){
-      found = 1;
+    if (free_pg->state == UNUSEDPG){
+        found = 1;
     }
   }
 
   if(found){
-    printf("found\n");
     swp_in(round_va, pyscpg, free_pg);
   }
   else{
-    printf("not found\n");
-    //TODO:change algorithm for task2
     struct page* pg_to_swap = select_page_to_swap();
-    //TODO:change algorithm for task2
     int swap_index = 0;
     for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
       if (pg->state == UNUSEDPG){
@@ -479,22 +557,20 @@ load_disk_page(uint64 va){
       }
       swap_index ++;
     }
-    printf("before walk addr\n");
-    uint64 pa = walkaddr(p->pagetable, pg_to_swap->va);
+    pte_t* pte_to_take_from = walk(p->pagetable, pg_to_swap->va, 0);
+    uint64 pa = PTE2PA(*pte_to_take_from);
     release(&p->lock);
     writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
     acquire(&p->lock);
-    printf("after write\n");
     kfree((void*)pa);
     p->swapped_pages[swap_index] = *pg_to_swap;
     p->swapped_pages[swap_index].state = USEDPG;
     pte_t* pte = walk(p->pagetable, pg_to_swap->va, 0);
-    *pte = *pte | PTE_PG;
-    *pte = *pte & ~PTE_V; 
+    *pte |= PTE_PG;
+    *pte &= ~PTE_V; 
     sfence_vma();
 
-    swp_in(round_va, pyscpg, free_pg);
-    printf("free pg pagetable %p\n", free_pg->pagetable);
+    swp_in(round_va, pyscpg, pg_to_swap);
   }
   release(&p->lock);
 }
