@@ -151,13 +151,6 @@ found:
 static void
 freeproc(struct proc *p)
 {
-  #ifndef NONE
-  if(p->pid > 2){
-    release(&p->lock);
-    removeSwapFile(p);
-    acquire(&p->lock);
-  }
-  #endif
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -192,49 +185,6 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 
 }
-
-#ifndef NONE
-
-static void
-freeprocwithoutswapfile(struct proc *p)
-{
-  if(p->trapframe)
-    kfree((void*)p->trapframe);
-  p->trapframe = 0;
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
-
-  #ifndef NONE
-  if(p->pid > 2){
-    for(struct page* pg = p->swapped_pages; pg < &p->swapped_pages[MAX_PSYC_PAGES]; pg++){
-      pg->state = UNUSEDPG;
-      pg->pagetable = 0;
-      pg->va = 0;
-      pg->counter = 0;
-    }
-    for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
-      pg->state = UNUSEDPG;
-      pg->pagetable = 0;
-      pg->va = 0;
-      pg->counter = 0;
-    }
-  }
-  #endif
-
-  p->pagetable = 0;
-  p->sz = 0;
-  p->pid = 0;
-  p->parent = 0;
-  p->name[0] = 0;
-  p->chan = 0;
-  p->killed = 0;
-  p->xstate = 0;
-  p->state = UNUSED;
-
-}
-
-#endif
-
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -358,21 +308,6 @@ fork(void)
     release(&np->lock);
     return -1;
   }
-  // if(p->pid > 2){
-  //   char buffer[MAX_PSYC_PAGES*PGSIZE];
-  //   memset((void*)&buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-  //   release(&np->lock);
-  //   readFromSwapFile(p, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-  //   writeToSwapFile(np, buffer, 0, MAX_PSYC_PAGES*PGSIZE);
-  //   acquire(&np->lock);
-
-  //   for(int page_index = 0; page_index < MAX_PSYC_PAGES; page_index++){
-  //     np->psyc_pages[page_index] = p->psyc_pages[page_index];
-  //     np->swapped_pages[page_index] = p->swapped_pages[page_index];
-  //     np->psyc_pages[page_index].pagetable = np->pagetable;
-  //     np->swapped_pages[page_index].pagetable = np->pagetable;
-  //   }
-  // }
 
 
   #ifndef NONE
@@ -478,6 +413,9 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+  if(p->pid > 2){
+    removeSwapFile(p);
+  }
 
   begin_op();
   iput(p->cwd);
@@ -533,19 +471,8 @@ wait(uint64 addr)
             release(&np->lock);
             release(&wait_lock);
             return -1;
-          }
-          #ifndef NONE
-          if(np->pid > 2){
-            release(&wait_lock);
-            release(&np->lock);
-            removeSwapFile(np);
-            acquire(&np->lock);
-            acquire(&wait_lock);
-          }
-          freeprocwithoutswapfile(np);
-          #else
+          }    
           freeproc(np);
-          #endif
           release(&np->lock);
           release(&wait_lock);
           return pid;
@@ -592,19 +519,23 @@ scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+        #ifndef NONE
+        #ifndef SCFIFO
         for(struct page* pg = p->psyc_pages; pg < &p->psyc_pages[MAX_PSYC_PAGES]; pg++){
           if(pg->state == UNUSEDPG){
             continue;
           }
           pte_t* pte = walk(p->pagetable, pg->va, 0);
           if(PTE_A & *pte){ 
-            pg->counter = (pg->counter >> 1) | 1L << 31;
+            pg->counter = (pg->counter >> 1) | 1 << ((sizeof(uint)*8)-1);
             *pte &= ~PTE_A;
           }
           else{
             pg->counter = (pg->counter >> 1);
           }
         }
+        #endif
+        #endif
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;

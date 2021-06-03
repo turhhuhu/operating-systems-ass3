@@ -92,7 +92,7 @@ select_page_to_swap()
 {
   struct proc* p = myproc();
   struct page* min_page = &p->psyc_pages[0];
-  
+
   for(struct page* page_to_swap = p->psyc_pages; page_to_swap < &p->psyc_pages[MAX_PSYC_PAGES]; page_to_swap++){
     if(page_to_swap->counter < min_page->counter){
       min_page = page_to_swap;
@@ -111,11 +111,10 @@ select_page_to_swap()
 {
   struct proc* p = myproc();
   struct page* min_page = &p->psyc_pages[0];
-  
-
   for(struct page* page_to_swap = p->psyc_pages; page_to_swap < &p->psyc_pages[MAX_PSYC_PAGES]; page_to_swap++){
     uint p_ones = count_one_bits(page_to_swap->counter);
     uint curr_min_ones = count_one_bits(min_page->counter);
+    printf("page to swap number of ones: %d\n", p_ones);
     if(p_ones < curr_min_ones){
       min_page = page_to_swap;
     }
@@ -371,7 +370,6 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
 void
 swapout(pagetable_t pagetable, uint64 a){
-    printf("before swap out\n");
   struct proc* p = myproc();
   struct page* pg_to_save = select_page_to_swap();
 
@@ -384,14 +382,8 @@ swapout(pagetable_t pagetable, uint64 a){
   }
 
   release(&p->lock);
-  printf("state of pg is: %s\n", pg_to_save->state == UNUSEDPG ? "UNUSEDPG" : "USEDPG");
-  printf("virutal address is: %p\n", pg_to_save->va);
-  printf("pg pagetable: %p\n", pg_to_save->pagetable);
-  printf("process pagetable: %p\n", p->pagetable);
-  printf("function pagetable: %p\n", pagetable);
   pte_t* pte_to_take_from = walk(pg_to_save->pagetable, pg_to_save->va, 0);
   uint64 pa = PTE2PA(*pte_to_take_from);
-  printf("physical address is: %p\n", pa);
   writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
   acquire(&p->lock);
   kfree((void*)pa);
@@ -413,7 +405,6 @@ swapout(pagetable_t pagetable, uint64 a){
   pg_to_swap->pagetable = pagetable;
   pg_to_swap->state = USEDPG;
   pg_to_swap->counter = reset_couter_value();
-  printf("after swap out\n");
   #ifdef SCFIFO
   move_to_end_of_queue(pg_to_swap);
   #endif
@@ -462,6 +453,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
         }
       }
       if (!found){
+        printf("RAM is full, swapping out a page...\n");
         swapout(pagetable, a);
       }
       release(&p->lock);
@@ -557,7 +549,7 @@ load_disk_page(uint64 va){
       }
       swap_index ++;
     }
-    pte_t* pte_to_take_from = walk(p->pagetable, pg_to_swap->va, 0);
+    pte_t* pte_to_take_from = walk(pg_to_swap->pagetable, pg_to_swap->va, 0);
     uint64 pa = PTE2PA(*pte_to_take_from);
     release(&p->lock);
     writeToSwapFile(p, (char *)pa, swap_index*PGSIZE, PGSIZE);
@@ -565,7 +557,7 @@ load_disk_page(uint64 va){
     kfree((void*)pa);
     p->swapped_pages[swap_index] = *pg_to_swap;
     p->swapped_pages[swap_index].state = USEDPG;
-    pte_t* pte = walk(p->pagetable, pg_to_swap->va, 0);
+    pte_t* pte = walk(pg_to_swap->pagetable, pg_to_swap->va, 0);
     *pte |= PTE_PG;
     *pte &= ~PTE_V; 
     sfence_vma();

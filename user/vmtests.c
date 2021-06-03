@@ -89,13 +89,17 @@ oom(char *s)
   } else {
     int xstatus;
     wait(&xstatus);
-    printf("xstatus was: %d\n", xstatus);
     exit(xstatus == 0);
   }
 }
 
-// run each test in its own process. run returns 1 if child's exit()
-// indicates success.
+void loadfromdisktest(){
+    sbrk(PGSIZE*70);
+    sbrk(PGSIZE*50);
+    printf("after malloc\n");
+
+}
+
 int
 run(void f(char *), char *s) {
   int pid;
@@ -111,12 +115,12 @@ run(void f(char *), char *s) {
     exit(0);
   } else {
     wait(&xstatus);
-    printf("xstatus was: %d\n", xstatus);
-    if(xstatus != 0 && xstatus != 1) //TODO: might need to remove xstaus!=1
+    printf("xstatus: %d\n",xstatus);
+    if(xstatus != 0 && xstatus != 1) 
       printf("test %s: FAILED\n", s);
     else
       printf("test %s: OK\n", s);
-    return xstatus == 0 || xstatus == 1; //TODO: might need to remove xstaus==1
+    return xstatus == 0 || xstatus == 1;
   }
 }
 
@@ -132,9 +136,10 @@ main(int argc, char *argv[])
     void (*f)(char *);
     char *s;
   } tests[] = {
-    { sparse_memory, "sparse_memory"},
-    {sparse_memory_unmap, "sparse_memory_unmap"},
-    {oom, "oom"},
+    // { sparse_memory, "sparse_memory"},
+    // {sparse_memory_unmap, "sparse_memory_unmap"},
+    // {oom, "oom"},
+    {loadfromdisktest, "load from disk test"},
     { 0, 0},
   };
     

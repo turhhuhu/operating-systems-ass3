@@ -74,7 +74,7 @@ usertrap(void)
       uint64 va = r_stval();
       pte_t* pte = walk(p->pagetable, va, 0);
       if(PTE_PG & *pte){
-        printf("loading page from disk\n");
+        printf("loading page from disk...\n");
         load_disk_page(va);
       }
   } 
