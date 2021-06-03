@@ -114,7 +114,6 @@ select_page_to_swap()
   for(struct page* page_to_swap = p->psyc_pages; page_to_swap < &p->psyc_pages[MAX_PSYC_PAGES]; page_to_swap++){
     uint p_ones = count_one_bits(page_to_swap->counter);
     uint curr_min_ones = count_one_bits(min_page->counter);
-    printf("page to swap number of ones: %d\n", p_ones);
     if(p_ones < curr_min_ones){
       min_page = page_to_swap;
     }

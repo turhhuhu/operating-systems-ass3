@@ -73,31 +73,13 @@ sparse_memory_unmap(char *s)
   exit(0);
 }
 
-void
-oom(char *s)
-{
-  void *m1, *m2;
-  int pid;
-
-  if((pid = fork()) == 0){
-    m1 = 0;
-    while((m2 = malloc(1)) != 0){
-      *(char**)m2 = m1;
-      m1 = m2;
-    }
-    exit(0);
-  } else {
-    int xstatus;
-    wait(&xstatus);
-    exit(xstatus == 0);
-  }
-}
-
 void loadfromdisktest(){
-    sbrk(PGSIZE*70);
-    sbrk(PGSIZE*50);
-    printf("after malloc\n");
-
+    char *m1, *m2;
+    m1 =0;
+    sbrk(PGSIZE*12);
+    m2 = malloc(1);
+    *(char**)m2 = m1;
+    m1 = m2;
 }
 
 int
@@ -136,9 +118,8 @@ main(int argc, char *argv[])
     void (*f)(char *);
     char *s;
   } tests[] = {
-    // { sparse_memory, "sparse_memory"},
-    // {sparse_memory_unmap, "sparse_memory_unmap"},
-    // {oom, "oom"},
+    { sparse_memory, "sparse_memory"},
+    {sparse_memory_unmap, "sparse_memory_unmap"},
     {loadfromdisktest, "load from disk test"},
     { 0, 0},
   };
